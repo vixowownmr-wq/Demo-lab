@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
 import Wavesurfer from 'wavesurfer.js'
-import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.esm.js'
 import {
   saveAudio,
   getAudio,
@@ -12,11 +11,13 @@ function App() {
 
   const waveformRef = useRef(null)
   const wavesurferRef = useRef(null)
-  const regionsRef = useRef(null)
 
   const [currentTime, setCurrentTime] = useState(0)
 
   const [duration, setDuration] = useState(0)
+
+//estado para saber si está reproduciendo
+  const [isPlaying, setIsPlaying] = useState(0)
 
   const [showForm, setShowForm] = useState(false)
 
@@ -131,16 +132,6 @@ function App() {
       timestamp: timestamp
     }
 
-    if (regionsRef.current) {
-      regionsRef.current.addRegion({
-        id: String(newComment.id),
-        start: newComment.timestamp,
-        end: newComment.timestamp + 0.15,
-        color: 'rgba(255, 255, 255, 0.9)',
-        drag: false,
-        resize: false
-      })
-    }
 
     const updatedVersion = {
       ...selectedVersion,
@@ -168,7 +159,7 @@ function App() {
     setSelectedVersion(updatedVersion)
     setCommentText('')
   }
-
+    //Borrar comentario
   function deleteComment(commentId) {
     const updatedVersion = {
       ...selectedVersion,
@@ -196,8 +187,42 @@ function App() {
 
     setSelectedProject(updatedProject)
     setSelectedVersion(updatedVersion)
+  } 
+
+    //Borrar Version
+  async function deleteVersion(versionId) {
+    const confirmDelete = window.confirm(
+      '¿Seguro que quieres eliminar esta versión? Se eliminarán el audio y todos sus comentarios.'
+
+    )
+
+    if(!confirmDelete) return
+
+    await deleteAudio(versionId)
+
+    const updatedProject = {
+      ...selectedProject,
+      versions: selectedProject.versions.filter(
+        (version) => version.id !== versionId
+      )
+    }
+
+    setProjects(
+      projects.map((project) =>
+        project.id === selectedProject.id
+          ? updatedProject
+          : project
+      )
+    )
+
+    setSelectedProject(updatedProject)
+
+    if (selectedVersion?.id === versionId) {
+      setSelectedVersion(null)
+    }
   }
 
+    //Borrar version
 
   async function deleteProject(projectId) {
     const confirmDelete = window.confirm(
@@ -244,6 +269,8 @@ function App() {
   function togglePlay() {
     if (wavesurferRef.current) {
       wavesurferRef.current.playPause()
+
+      setIsPlaying(wavesurferRef.current.isPlaying())
     }
   }
 
@@ -262,10 +289,6 @@ function App() {
       return
     }
 
-    const regions = RegionsPlugin.create()
-
-    regionsRef.current = regions
-
     const wavesurfer = Wavesurfer.create({
       container: waveformRef.current,
       height: 100,
@@ -275,7 +298,9 @@ function App() {
       barWidth: 2,
       barGap: 2,
       barRadius: 2,
-      plugins: [regions]
+//Arrastrar 
+      dragToSeek: true,
+
     })
 
     wavesurfer.load(selectedVersion.audio)
@@ -285,31 +310,30 @@ function App() {
     wavesurfer.on('ready', () => {
       const audioDuration = wavesurfer.getDuration()
 
+      setCurrentTime(0)
+      setIsPlaying(false)
       setDuration(audioDuration)
 
-      selectedVersion.comments.forEach((comment) => {
-        regions.addRegion({
-          id: String(comment.id),
-          start: comment.timestamp,
-          end: Math.min(
-            comment.timestamp + 0.15,
-            audioDuration
-        ),
-        color: 'rgba(255, 255, 255, 0.9)',
-        drag: false,
-        resize: false
-      })
-    })
   })
 
-    wavesurfer.on('timeupdate', (time) => {
-      setCurrentTime(time)
+
+// Escuchar que está haciendo el boton
+
+    wavesurfer.on('play', () => {
+      setIsPlaying(true)
+    })
+
+    wavesurfer.on('paude', () => {
+      setIsPlaying(false)
+    })
+
+    wavesurfer.on('finish', () => {
+      setIsPlaying(false)
     })
 
     return () => {
       wavesurfer.destroy()
       wavesurferRef.current = null
-      regionsRef.current = null
     }
   }, [selectedVersion?.audio])
 
@@ -335,17 +359,47 @@ function App() {
 
         {selectedVersion.audio ? (
           <section className="player-card">
-            <div
-              ref={waveformRef}
-              className="waveform"
-            ></div>
+            <div className="waveform-container">
+
+              <div
+                ref={waveformRef}
+                className="waveform"
+              ></div>
+
+              <div className="comment-markers">
+                {duration > 0 &&
+                  selectedVersion.comments.map((comment, index) => (
+                    <button
+                      key={comment.id}
+                      className="comment-marker"
+                      style={{
+                          left: `${(comment.timestamp / duration) * 100}%`
+                      }}
+                      onClick={() => goToTimestamp(comment.timestamp)}
+                    >
+                      <span className="marker-number">
+                        {index + 1}
+                      </span>
+
+                      <div className="comment-tooltip">
+                        <span calssName="tooltip-time">
+                          {formatTime(comment.timestamp)}
+                        </span>
+
+                        <p>{comment.text}</p>
+                      </div>
+                    </button>
+                  ))
+                }
+                </div>
+            </div>
             <div className="player-controls">
 
               <button
                 className="play-button"
                 onClick={togglePlay}
               >
-                ▶
+                {isPlaying ? '⏸' : '▶'}
               </button>
 
               <span className="player-time">

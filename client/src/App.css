@@ -554,3 +554,153 @@
   transform: scale(1.05);
 }
 
+wave-region {
+  overflow: visible !important;
+}
+
+wave-region > div {
+  position: absolute !important;
+  left: 50% !important;
+  top: 0 !important;
+  transform: translateX(-50%) !important;
+
+  color: white !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+
+  pointer-events: none;
+}
+
+.waveform-container {
+  position: relative;
+}
+
+.comment-markers {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+
+  height: 100px;
+
+  pointer-events: none;
+}
+
+.comment-marker {
+  position: absolute;
+  top: 4px;
+
+  transform: translateX(-50%);
+
+  width: 16px;
+  height: 16px;
+
+  padding: 0;
+
+  border: 1px solid #ffffff;
+  border-radius: 50%;
+
+  background: #18181b;
+  color: #ffffff;
+
+  font-size: 9px;
+  font-weight: 700;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  cursor: pointer;
+  pointer-events: auto;
+
+  z-index: 20;
+
+  transition:
+    transform 0.15s ease,
+    background 0.15s ease;
+}
+
+.comment-marker::after {
+  content: '';
+
+  position: absolute;
+
+  top: 100%;
+  left: 50%;
+
+  width: 1px;
+  height: 80px;
+
+  background: rgba(255, 255, 255, 0.8);
+
+  transform: translateX(-50%);
+
+  pointer-events: none;
+}
+
+.comment-marker:hover {
+  background: #7c3aed;
+  transform: translateX(-50%) scale(1.15);
+}
+
+.comment-tooltip {
+  position: absolute;
+
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+
+  min-width: 160px;
+  max-width: 240px;
+
+  padding: 10px 12px;
+
+  background: #1f1f23;
+
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+
+  color: white;
+
+  text-align: left;
+
+  opacity: 0;
+  visibility: hidden;
+
+  pointer-events: none;
+
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
+
+  z-index: 50;
+
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.comment-marker:hover .comment-tooltip {
+  opacity: 1;
+  visibility: visible;
+
+  transform: translateX(-50%) translateY(-2px);
+}
+
+.tooltip-time {
+  display: block;
+
+  margin-bottom: 4px;
+
+  color: #a78bfa;
+
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.comment-tooltip p {
+  margin: 0;
+
+  color: #ffffff;
+
+  font-size: 12px;
+  line-height: 1.35;
+}
