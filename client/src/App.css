@@ -108,6 +108,12 @@
   margin: 0;
 }
 
+.version-date {
+  margin: 4px 0;
+  color: #888;
+  font-size: 12px;
+}
+
 .player-card {
   background: #18181b;
   border: 1px solid #27272a;
@@ -437,6 +443,28 @@
 .open-version:hover {
   border-color: #7c3aed;
   color: #a78bfa;
+}
+
+.edit-version {
+  background: transparent;
+  border: none;
+
+  color: #aaa;
+
+  font-size: 16px;
+
+  padding: 6px;
+
+  cursor: pointer;
+
+  transition:
+    color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.edit-version:hover {
+  color: #ffffff;
+  transform: scale(1.1);
 }
 
 .delete-comment {

@@ -27,6 +27,10 @@ function App() {
 
   const [selectedVersion, setSelectedVersion] = useState(null)
 
+  const [editingVersionId, setEditingVersionId] = useState(null)
+
+  const [versionLabel, setVersionLabel] = useState('')
+
   const [commentText, setCommentText] = useState('')
 
   const [projects, setProjects] = useState(() => {
@@ -76,9 +80,11 @@ function App() {
 
     const newVersion = {
       id: versionId,
-      name: `Demo v${nextVersionNumber}`,
+      number: nextVersionNumber,
+      label: '',
       audio: audioUrl,
-      comments: []
+      comments: [],
+      createdAt: new Date().toISOString()
     }
 
     const updatedProject = {
@@ -115,6 +121,38 @@ function App() {
         audio: null
       })
     }
+  }
+
+  function startEditingVersion(version) {
+    setEditingVersionId(version.id)
+    setVersionLabel(version.label ?? '')
+  }
+
+  function saveVersionLabel(versionId) {
+    const updatedProject = {
+      ...selectedProject,
+      versions: selectedProject.versions.map((version) => 
+        version.id === versionId
+          ? {
+              ...version,
+              label: versionLabel.trim()
+            }
+          : version
+        )
+    }
+
+    setProjects(
+      projects.map((project) =>
+        project.id === selectedProject.id
+          ? updatedProject
+          : project
+      )
+    )
+
+    setSelectedProject(updatedProject)
+
+    setEditingVersionId(null)
+    setVersionLabel('')
   }
 
   function addComment() {
@@ -222,7 +260,7 @@ function App() {
     }
   }
 
-    //Borrar version
+    //Borrar proyecto
 
   async function deleteProject(projectId) {
     const confirmDelete = window.confirm(
@@ -319,11 +357,15 @@ function App() {
 
 // Escuchar que está haciendo el boton
 
+    wavesurfer.on('timeupdate', (time) => {
+      setCurrentTime(time)
+    })
+
     wavesurfer.on('play', () => {
       setIsPlaying(true)
     })
 
-    wavesurfer.on('paude', () => {
+    wavesurfer.on('pause', () => {
       setIsPlaying(false)
     })
 
@@ -354,7 +396,13 @@ function App() {
             {selectedProject.name}
           </p>
 
-          <h1>{selectedVersion.name}</h1>
+          <h1>
+            {selectedVersion.number
+              ? `v${selectedVersion.number}`
+              : selectedVersion.name}
+              
+            {selectedVersion.label && ` - ${selectedVersion.label}`}
+          </h1>
         </header>
 
         {selectedVersion.audio ? (
@@ -382,7 +430,7 @@ function App() {
                       </span>
 
                       <div className="comment-tooltip">
-                        <span calssName="tooltip-time">
+                        <span className="tooltip-time">
                           {formatTime(comment.timestamp)}
                         </span>
 
@@ -513,7 +561,7 @@ function App() {
             + Subir nueva versión
 
             <input
-               type="file"
+               type="file" 
                accept="audio/*"
                onChange={handleAudioUpload}
                hidden
@@ -521,7 +569,8 @@ function App() {
           </label>
 
         </header>
-
+        
+      {/* Tarjetas */}
         <h2>Versiones</h2>
 
         <div className="versions">
@@ -541,8 +590,48 @@ function App() {
 
               <div className="version-info">
 
-                <h3>{version.name}</h3>
+                {/*Nombre de la versión */}
+                  {editingVersionId === version.id ?(
+                    <div className="version-name-edit">
 
+                      <input
+                         type="text"
+                         value={versionLabel}
+                         placeholder="Ej: Pre-master"
+                         onChange={(event) => setVersionLabel(event.target.value)}
+                         onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            saveVersionLabel(version.id)
+                          }
+                        }}
+                        autoFocus 
+                      />
+
+                      <button
+                        onClick={() => saveVersionLabel(version.id)}
+                      >
+                        Guardar
+
+                      </button>
+
+                    </div>
+                  ) : (
+                    <h3>
+                      {version.number
+                        ? `v${version.number}`
+                        : version.name}
+
+                      {version.label && ` - ${version.label}`}
+                    </h3>
+
+                  )}
+
+                <p className="version-date">
+                  {version.createdAt
+                    ? new Date(version.createdAt).toLocaleString('es-CL')
+                    : 'Fecha no disponible'}
+                </p>
+                {/*Cantidad de comentarios */}
                 <p>
                   {version.comments.length} comentarios
                 </p>
@@ -554,6 +643,15 @@ function App() {
                 onClick={() => openVersion(version)}
               >
                 Abrir
+              </button>
+
+              <button
+                className="edit-version"
+                onClick={() => startEditingVersion(version)}
+                title="Renombrar versión"
+                aria-label="Renombrar versión"
+              >
+                ✏️
               </button>
 
               <button
@@ -588,6 +686,7 @@ function App() {
       </main>
     )
   }
+  /*Dashboard Principal */
   return (
     <main className="dashboard">
 
@@ -610,6 +709,11 @@ function App() {
             placeholder="Nombre del proyecto" 
             value={projectName}
             onChange={(event) => setProjectName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                createProject()
+              }
+            }}
           />
 
           <button onClick={createProject}>
@@ -640,8 +744,21 @@ function App() {
 
                 <p>
                   {project.versions.length > 0
-                    ? `Última versión: ${project.versions[project.versions.length - 1].name}`
-                    : 'Sin versiones todavía'
+                    ? (() => {
+                      const latestVersion =
+                        project.versions[project.versions.length - 1]
+
+                      const versionName = latestVersion.number
+                        ? `v${latestVersion.number}`
+                        : latestVersion.name
+
+                      return `Última versión: ${versionName}${
+                        latestVersion.label
+                          ?` - ${latestVersion.label}`
+                          : ''
+                      }`
+                    })()
+                  : 'Sin versiones todavía'
                   }
                 </p>
 
