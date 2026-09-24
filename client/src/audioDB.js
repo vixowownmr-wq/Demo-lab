@@ -22,3 +22,8 @@ export async function deleteAudio(id) {
   const db = await dbPromise
   await db.delete('audios', id)
 }
+
+export async function getAllAudioKeys() {
+  const db = await dbPromise
+  return await db.getAllKeys('audios')
+}

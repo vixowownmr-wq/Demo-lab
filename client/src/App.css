@@ -374,6 +374,115 @@
   font-size: 36px;
 }
 
+.project-type {
+  display: inline-block;
+
+  margin-bottom: 6px;
+  padding: 3px 8px;
+
+  border-radius: 999px;
+
+  background: rgba(124, 58, 237, 0.15);
+  color: #c4b5fd;
+
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.project-type-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+
+  margin: 12px 0;
+}
+
+.project-type-field label {
+  color: #a1a1aa;
+  font-size: 13px;
+}
+
+.project-type-field select {
+  background: #18181b;
+  color: white;
+
+  border: 1px solid #3f3f46;
+  border-radius: 8px;
+
+  padding: 10px 12px;
+
+  outline: none;
+  cursor: pointer;
+}
+
+.project-type-field select:focus {
+  border-color: #7c3aed;
+}
+
+.track-form {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.track-form input {
+  flex: 1;
+
+  background: #18181b;
+  color: white;
+
+  border: 1px solid #3f3f46;
+  border-radius: 8px;
+
+  padding: 10px 12px;
+
+  outline: none;
+}
+
+.track-form input:focus {
+  border-color: #7c3aed;
+}
+
+.tracks {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.track-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+
+  padding: 14px;
+
+  background: #18181b;
+
+  border: 1px solid #27272a;
+  border-radius: 10px;
+
+  cursor: pointer;
+}
+
+.track-number {
+  color: #a78bfa;
+  font-weight: 700;
+}
+
+.track-info {
+  flex: 1;
+}
+
+.track-info h3 {
+  margin: 0 0 4px;
+}
+
+.track-info p {
+  margin: 0;
+  color: #888;
+  font-size: 12px;
+}
+
 .upload-version {
   display: inline-flex;
   align-items: center;
@@ -465,6 +574,55 @@
 .edit-version:hover {
   color: #ffffff;
   transform: scale(1.1);
+}
+
+.version-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  margin: 6px 0;
+}
+
+.status-badge {
+  padding: 4px 8px;
+
+  border-radius: 999px;
+
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.status-demo {
+  background: #27272a;
+  color: #d4d4d8;
+}
+
+.status-review {
+  background: rgba(124, 58, 237, 0.18);
+  color: #c4b5fd;
+}
+
+.status-approved {
+  background: rgba(34, 197, 94, 0.16);
+  color: #86efac;
+}
+
+.status-final {
+  background: rgba(59, 130, 246, 0.18);
+  color: #93c5fd;
+}
+
+.version-status select {
+  background: #18181b;
+  color: white;
+
+  border: 1px solid #3f3f46;
+  border-radius: 6px;
+
+  padding: 5px 8px;
+
+  cursor: pointer;
 }
 
 .delete-comment {
