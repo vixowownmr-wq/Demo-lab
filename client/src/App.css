@@ -890,3 +890,254 @@ wave-region > div {
   font-size: 12px;
   line-height: 1.35;
 }
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.backup-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  padding: 10px 16px;
+
+  border: 1px solid #333;
+  border-radius: 10px;
+
+  background: #1a1a1a;
+  color: #e5e5e5;
+
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+
+  cursor: pointer;
+
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.backup-button:hover {
+  background: #242424;
+  border-color: #555;
+}
+
+.backup-button:active {
+  transform: scale(0.97);
+}
+
+
+/* =====================================
+   DEMOLAB - DASHBOARD REDESIGN
+===================================== */
+
+.dashboard {
+  max-width: 1280px;
+  padding: 48px 32px;
+}
+
+.dashboard .header {
+  margin-bottom: 48px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid #27272a;
+}
+
+.dashboard .header h1 {
+  font-size: 36px;
+  font-weight: 800;
+  letter-spacing: -1.5px;
+  color: #f8fafc;
+}
+
+.dashboard section > h2 {
+  font-size: 22px;
+  font-weight: 650;
+  margin-bottom: 24px;
+  letter-spacing: -0.5px;
+}
+
+.dashboard .projects {
+  display: grid;
+  grid-template-columns: repeat(
+    auto-fill,
+    minmax(260px, 1fr)
+  );
+  gap: 24px;
+}
+
+.dashboard .project-card {
+  width: auto;
+  min-width: 0;
+  border-radius: 16px;
+  background: #18181b;
+  border: 1px solid #303036;
+  overflow: hidden;
+  transition:
+    transform 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.dashboard .project-card:hover {
+  transform: translateY(-5px);
+  border-color: #7c3aed;
+  box-shadow: 0 12px 35px rgba(0, 0, 0, 0.25);
+}
+
+.dashboard .project-cover {
+  height: 185px;
+  background: linear-gradient(
+    145deg,
+    #272035,
+    #19161f
+  );
+  overflow: hidden;
+}
+
+.dashboard .project-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.dashboard .project-info {
+  padding: 20px;
+}
+
+.dashboard .project-info h3 {
+  font-size: 19px;
+  font-weight: 700;
+  margin-bottom: 12px;
+  color: #f4f4f5;
+}
+
+.dashboard .project-info p {
+  line-height: 1.5;
+  margin-top: 12px;
+}
+
+.dashboard .new-project {
+  transition:
+    transform 0.2s ease,
+    background 0.2s ease;
+}
+
+.dashboard .new-project:hover {
+  transform: translateY(-2px);
+}
+
+@media (max-width: 700px) {
+  .dashboard {
+    padding: 24px 16px;
+  }
+
+  .dashboard .header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 18px;
+  }
+
+  .dashboard .header-actions {
+    flex-wrap: wrap;
+  }
+
+  .dashboard .projects {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* ===== DASHBOARD STATS ===== */
+
+.dashboard-stats {
+  margin-bottom: 42px;
+}
+
+.dashboard-stats h2 {
+  font-size: 20px;
+  margin-bottom: 20px;
+  font-weight: 600;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.stat-card {
+  background: #18181b;
+  border: 1px solid #303036;
+  border-radius: 14px;
+  padding: 22px;
+  transition:
+    transform 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.stat-card:hover {
+  transform: translateY(-3px);
+  border-color: #52525b;
+}
+
+.stat-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  font-size: 21px;
+  margin-bottom: 20px;
+}
+
+.stat-icon.purple {
+  color: #c4b5fd;
+  background: rgba(124, 58, 237, 0.15);
+}
+
+.stat-icon.blue {
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.15);
+}
+
+.stat-icon.yellow {
+  color: #fde68a;
+  background: rgba(234, 179, 8, 0.15);
+}
+
+.stat-icon.green {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.15);
+}
+
+.stat-card h3 {
+  font-size: 32px;
+  font-weight: 750;
+  margin: 0 0 6px;
+  color: #fafafa;
+}
+
+.stat-card p {
+  font-size: 13px;
+  color: #a1a1aa;
+  margin: 0;
+}
+
+@media (max-width: 900px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+}

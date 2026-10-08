@@ -4,14 +4,77 @@ import {
   saveAudio,
   getAudio,
   deleteAudio,
-  getAllAudioKeys
+  getAllAudioKeys,
+  saveCover,
+  getCover,
+  deleteCover
 } from './audioDB'
 import './App.css'
+
+function ProjectCover({ project }) {
+  const [coverUrl, setCoverUrl] = useState(null)
+
+  useEffect(() => {
+    let objectUrl
+
+    async function loadCover() {
+      const coverFile = await getCover(project.id)
+
+      if (!coverFile) {
+        setCoverUrl(null)
+        return
+      }
+
+      objectUrl = URL.createObjectURL(coverFile)
+
+      setCoverUrl(objectUrl)
+    }
+
+    loadCover()
+
+    return () => {
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl)
+      }
+    }
+  }, [project.id])
+
+  if (!coverUrl) {
+    return (
+      <div className="project-cover">
+        🎵
+      </div>
+    )
+  }
+
+  return (
+    <div className="project-cover">
+      <img
+        src={coverUrl}
+        alt={`Portada de ${project.name}`}
+      />
+    </div>
+  )
+}
 
 function App() {
 
   const waveformRef = useRef(null)
   const wavesurferRef = useRef(null)
+  
+  const releaseAudioRef = useRef(null)
+  const releaseUrlRef = useRef(null)
+
+  const [releaseQueue, setReleaseQueue] = useState([])
+
+  const [releaseIndex, setReleaseIndex] = useState(-1)
+
+  const [isReleasePlaying, setIsReleasePlaying] = useState(false)
+
+  const [releaseCurrentTime, setReleaseCurrentTime] = useState(0)
+
+  const [releaseDuration, setReleaseDuration] = useState(0)
+
 
   const [currentTime, setCurrentTime] = useState(0)
 
@@ -21,6 +84,8 @@ function App() {
   const [isPlaying, setIsPlaying] = useState(0)
 
   const [showForm, setShowForm] = useState(false)
+
+  const [projectCover, setProjectCover] = useState(null)
 
   const [projectName, setProjectName] = useState('')
 
@@ -43,6 +108,8 @@ function App() {
   const [versionLabel, setVersionLabel] = useState('')
 
   const [commentText, setCommentText] = useState('')
+
+
 
   const [projects, setProjects] = useState(() => {
     const savedProjects = localStorage.getItem('demolab-projects')
@@ -79,6 +146,342 @@ function App() {
       await deleteAudio(id)
     }
   }
+
+  function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+
+      reader.onloadend = () => resolve(reader.result)
+      reader.onerror = reject
+
+      reader.readAsDataURL(blob)
+    })
+  }
+
+  async function handleCoverUpload(event) {
+    const file = event.target.files[0]
+
+    if (!file || !selectedProject) {
+      return
+    }
+
+    await saveCover(selectedProject.id, file)
+
+    const coverUrl = URL.createObjectURL(file)
+
+    const updatedProject = {
+      ...selectedProject,
+      cover: coverUrl
+    }
+
+    setProjects((currentProjects) =>
+      currentProjects.map((project) =>
+        project.id === selectedProject.id
+          ? updatedProject
+          : project
+      )
+    )
+
+    setSelectedProject(updatedProject)
+    setProjectCover(coverUrl)
+  }
+
+    useEffect(() => {
+      async function loadCover() {
+        if (!selectedProject) {
+          setProjectCover(null)
+          return
+        }
+
+        const coverFile = await getCover(selectedProject.id)
+
+        if (!coverFile) {
+          setProjectCover(null)
+          return
+        }
+
+        const coverUrl = URL.createObjectURL(coverFile)
+
+        setProjectCover(coverUrl)
+      }
+
+      loadCover()
+    }, [selectedProject?.id])
+
+
+
+  async function exportBackup() {
+    const audioIds = new Set()
+
+    const projectsForBackup = projects.map((project) => ({
+      ...project,
+
+      versions: (project.versions ?? []).map((version) => {
+        audioIds.add(version.id)
+
+        return {
+          ...version,
+          audio: null
+        }
+      }),
+
+      tracks: (project.tracks ?? []).map((track) => ({
+        ...track,
+
+        versions: (track.versions ?? []).map((version) => {
+          audioIds.add(version.id)
+
+          return {
+            ...version,
+            audio: null
+          }
+        })
+      }))
+    }))
+
+    const audios = []
+
+    for (const id of audioIds) {
+      const audioFile = await getAudio(id)
+
+      if (!audioFile) continue
+
+      const data = await blobToBase64(audioFile)
+
+      audios.push({
+        id,
+        data,
+        type: audioFile.type ?? 'audio/mpeg'
+      })
+    }
+
+    const backup = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      projects: projectsForBackup,
+      audios
+    }
+
+    const blob = new Blob(
+      [JSON.stringify(backup)],
+      { type: 'application/json' }
+    )
+
+    const url = URL.createObjectURL(blob)
+
+    const link = document.createElement('a')
+
+    link.href = url
+    link.download = `demolab-backup-${new Date()
+      .toISOString()
+      .slice(0, 10)}.json`
+
+    link.click()
+
+    URL.revokeObjectURL(url)
+  }
+
+  function buildReleaseQueue() {
+    return (selectedProject.tracks ?? [])
+      .filter((track) => track.versions?.length > 0)
+      .map((track) => {
+        const latestVersion =
+          track.versions[track.versions.length - 1]
+
+        return {
+          trackId: track.id,
+          trackName: track.name,
+          versionId: latestVersion.id,
+          versionNumber: latestVersion.number,
+          versionLabel: latestVersion.label ?? ''
+        }
+      })
+  }
+
+
+  async function loadReleaseTrack(queue, index, autoplay = true) {
+    const item = queue[index]
+
+    if (!item) {
+      return
+    }
+
+    const audioFile = await getAudio(item.versionId)
+
+    if (!audioFile) {
+      console.error(
+        `No se encontró el audio de ${item.trackName}`
+      )
+
+      return
+    }
+
+    if (releaseUrlRef.current) {
+      URL.revokeObjectURL(releaseUrlRef.current)
+    }
+
+    const audioUrl = URL.createObjectURL(audioFile)
+
+    releaseUrlRef.current = audioUrl
+
+    setReleaseIndex(index)
+    setReleaseCurrentTime(0)
+
+    const audio = releaseAudioRef.current
+
+    if (!audio) {
+      return
+    }
+
+    audio.src = audioUrl
+    audio.load()
+
+    if (autoplay) {
+      try {
+        await audio.play()
+        setIsReleasePlaying(true)
+      } catch (error) {
+        console.error('No se pudo reproducir:', error)
+        setIsReleasePlaying(false)
+      }
+    }
+  }
+
+
+  async function playRelease() {
+    const queue = buildReleaseQueue()
+
+    if (queue.length === 0) {
+      alert(
+        'Todavía no hay canciones con audio para reproducir.'
+      )
+      return
+    }
+
+    setReleaseQueue(queue)
+
+    await loadReleaseTrack(queue, 0, true)
+  }
+
+
+  function toggleReleasePlayback() {
+    const audio = releaseAudioRef.current
+
+    if (!audio) {
+      return
+    }
+
+    if (audio.paused) {
+      audio.play()
+      setIsReleasePlaying(true)
+    } else {
+      audio.pause()
+      setIsReleasePlaying(false)
+    }
+  }
+
+
+  async function nextReleaseTrack() {
+    const nextIndex = releaseIndex + 1
+
+    if (nextIndex >= releaseQueue.length) {
+      setIsReleasePlaying(false)
+      setReleaseIndex(-1)
+      return
+    }
+
+    await loadReleaseTrack(
+      releaseQueue,
+      nextIndex,
+      true
+    )
+  }
+
+
+  async function previousReleaseTrack() {
+    if (releaseIndex <= 0) {
+      return
+    }
+
+    await loadReleaseTrack(
+      releaseQueue,
+      releaseIndex - 1,
+      true
+    )
+  }
+
+
+  function handleReleaseSeek(event) {
+    const audio = releaseAudioRef.current
+
+    if (!audio) {
+      return
+    }
+
+    const newTime = Number(event.target.value)
+
+    audio.currentTime = newTime
+    setReleaseCurrentTime(newTime)
+  }
+
+    async function importBackup(event) {
+      const file = event.target.files[0]
+
+      if (!file) return
+
+      try {
+        const text = await file.text()
+        const backup = JSON.parse(text)
+
+        if (
+          !backup ||
+          !Array.isArray(backup.projects) ||
+          !Array.isArray(backup.audios)
+        ) {
+          alert('El archivo no parece ser un respaldo válido de DemoLab.')
+          return
+        }
+
+        const confirmImport = window.confirm(
+          'Importar este respaldo reemplazará los proyectos y audios actuales. ¿Quieres continuar?'
+        )
+
+        if (!confirmImport) {
+          event.target.value = ''
+          return
+        }
+
+        // Eliminar audios actuales
+        const currentAudioIds = await getAllAudioKeys()
+
+        for (const id of currentAudioIds) {
+          await deleteAudio(id)
+        }
+
+        // Restaurar audios del respaldo
+        for (const audio of backup.audios) {
+          const response = await fetch(audio.data)
+          const blob = await response.blob()
+
+          await saveAudio(audio.id, blob)
+        }
+
+        // Restaurar proyectos
+        setProjects(backup.projects)
+
+        setSelectedProject(null)
+        setSelectedTrack(null)
+        setSelectedVersion(null)
+
+        alert('✅ Respaldo restaurado correctamente.')
+      } catch (error) {
+        console.error(error)
+
+        alert('No se pudo importar el respaldo.')
+      }
+
+      event.target.value = ''
+    }
 
     useEffect(() => {
     async function runCleanup() {
@@ -242,6 +645,7 @@ function App() {
     setSelectedProject(updatedProject)
     setTrackName('')
   }
+  
 
   function startEditingTrack(track) {
     setEditingTrackId(track.id)
@@ -286,6 +690,46 @@ function App() {
 
     setEditingTrackId(null)
     setEditingTrackName('')
+  }
+
+  function moveTrack(trackId, direction) {
+    const currentTracks = [...selectedProject.tracks]
+
+    const currentIndex = currentTracks.findIndex(
+      (track) => track.id === trackId
+    )
+
+    if (currentIndex === -1) {
+      return
+    }
+
+    const newIndex =
+      direction === 'up'
+        ? currentIndex - 1
+        : currentIndex + 1
+
+    if (newIndex < 0 || newIndex >= currentTracks.length) {
+      return
+    }
+
+    const [movedTrack] = currentTracks.splice(currentIndex, 1)
+
+    currentTracks.splice(newIndex, 0, movedTrack)
+
+    const updatedProject = {
+      ...selectedProject,
+      tracks: currentTracks
+    }
+
+    setProjects((currentProjects) =>
+      currentProjects.map((project) =>
+        project.id === selectedProject.id
+          ? updatedProject
+          : project
+      )
+    )
+
+    setSelectedProject(updatedProject)
   }
 
   async function deleteTrack(trackId) {
@@ -872,6 +1316,8 @@ function App() {
           </label>
         </header>
 
+
+
         <h2>Versiones</h2>
 
         <div className="versions">
@@ -1012,7 +1458,18 @@ function App() {
   if (selectedProject) {
     return (
       <main className="project-page">
-
+        <audio
+          ref={releaseAudioRef}
+          onTimeUpdate={(event) =>
+            setReleaseCurrentTime(event.currentTarget.currentTime)
+          }
+          onLoadedMetadata={(event) =>
+            setReleaseDuration(event.currentTarget.duration)
+          }
+          onEnded={nextReleaseTrack}
+          onPlay={() => setIsReleasePlaying(true)}
+          onPause={() => setIsReleasePlaying(false)}
+        />
         <button
          className="back-button"
          onClick={() => setSelectedProject(null)}
@@ -1045,12 +1502,54 @@ function App() {
           )}
 
         </header>
+
+        <div className="project-cover-section">
+
+          {projectCover ? (
+            <img
+              src={projectCover}
+              alt={`Portada de ${selectedProject.name}`}
+              className="project-cover-image"
+            />
+          ) : (
+            <div className="project-cover-placeholder">
+              🎵
+            </div>
+          )}
+
+          {selectedProject.type !== 'beat' && (
+            <label className="cover-upload-button">
+              {projectCover ? 'Cambiar portada' : '+ Añadir portada'}
+
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleCoverUpload}
+                hidden
+              />
+            </label>
+          )}
+
+        </div>
         
       {/* Tarjetas */}
 
       {isRelease ? (
         <>
-          <h2>Canciones</h2>
+          <div className="release-heading">
+
+            <h2>Canciones</h2>
+
+            <button
+              className="play-release-button"
+              onClick={playRelease}
+            >
+              ▶ Escuchar {selectedProject.type === 'album'
+                ? 'álbum'
+                : 'EP'}
+            </button>
+
+          </div>
           
           <div className="track-form">
             <input
@@ -1130,6 +1629,30 @@ function App() {
                   <button
                     onClick={(event) => {
                       event.stopPropagation()
+                      moveTrack(track.id, 'up')
+                    }}
+                    disabled={index === 0}
+                    title="Mover canción arriba"
+                    aria-label="Mover canción arriba"
+                  >
+                    ↑
+                  </button>
+
+                  <button
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      moveTrack(track.id, 'down')
+                    }}
+                    disabled={index === selectedProject.tracks.length - 1}
+                    title="Mover canción abajo"
+                    aria-label="Mover canción abajo"
+                  >
+                    ↓
+                  </button>
+
+                  <button
+                    onClick={(event) => {
+                      event.stopPropagation()
                       setSelectedTrack(track)
                     }}
                   >
@@ -1176,7 +1699,82 @@ function App() {
           ))
         )}
       </div>
+      {releaseIndex !== -1 && releaseQueue[releaseIndex] && (
+
+        <div className="release-player">
+
+          <div className="release-player-info">
+
+            <span className="release-playing-label">
+              REPRODUCIENDO
+            </span>
+
+            <strong>
+              {releaseQueue[releaseIndex].trackName}
+            </strong>
+
+            <span>
+              v{releaseQueue[releaseIndex].versionNumber}
+
+              {releaseQueue[releaseIndex].versionLabel &&
+                ` · ${releaseQueue[releaseIndex].versionLabel}`
+              }
+            </span>
+
+          </div>
+
+          <div className="release-player-controls">
+
+            <button
+              onClick={previousReleaseTrack}
+              disabled={releaseIndex === 0}
+            >
+              ⏮
+            </button>
+
+            <button
+              className="release-play-main"
+              onClick={toggleReleasePlayback}
+            >
+              {isReleasePlaying ? '⏸' : '▶'}
+            </button>
+
+            <button
+              onClick={nextReleaseTrack}
+              disabled={
+                releaseIndex === releaseQueue.length - 1
+              }
+            >
+              ⏭
+            </button>
+
+          </div>
+
+          <div className="release-progress">
+
+            <span>
+              {formatTime(releaseCurrentTime)}
+            </span>
+
+            <input
+              type="range"
+              min="0"
+              max={releaseDuration || 0}
+              value={releaseCurrentTime}
+              onChange={handleReleaseSeek}
+            />
+
+            <span>
+              {formatTime(releaseDuration)}
+            </span>
+
+          </div>
+
+        </div>
+
+      )}
     </>
+    
   ) : (
     <>
   
@@ -1327,19 +1925,91 @@ function App() {
     )
   }
   /*Dashboard Principal */
+
+  const totalProjects = projects.length
+
+  const totalTracks = projects.reduce(
+    (total, project) => total + (project.tracks?.length ?? 0),
+    0
+  )
+
+  const allVersions = projects.flatMap((project) => [
+    ...(project.versions ?? []),
+    ...(project.tracks ?? []).flatMap(
+      (track) => track.versions ?? []
+    )
+  ])
+
+  const totalVersions = allVersions.length
+
+  const totalFinalVersions = allVersions.filter(
+    (version) => version.status === 'final'
+  ).length
+
   return (
     <main className="dashboard">
 
       <header className="header">
         <h1>DemoLab</h1>
 
-        <button
-           className="new-project"
-           onClick={() => setShowForm(true)}
-        >
+        <div className="header-actions">
+
+          <button
+            className="backup-button"
+            onClick={exportBackup}
+          >
+            ↓ Exportar
+          </button>
+
+          <label>
+            ↑ Importar
+
+            <input
+              type="file"
+              accept=".json,application/json"
+              onChange={importBackup}
+              hidden
+            />
+          </label>
+
+          <button
+            className="new-project"
+            onClick={() => setShowForm(true)}
+          >
             + Crear proyecto
-        </button>
+          </button>
+
+        </div>
       </header>
+      <section className="dashboard-stats">
+        <h2>Tu actividad musical</h2>
+        <div className="stats-grid">
+
+          <div className="stat-card">
+            <span className="stat-icon purple">◈</span>
+            <h3>{totalProjects}</h3>
+            <p>Proyectos</p>
+          </div>
+
+          <div className="stat-card">
+            <span className="stat-icon blue">♫</span>
+            <h3>{totalTracks}</h3>
+            <p>Canciones</p>
+          </div>
+
+          <div className="stat-card">
+            <span className="stat-icon yellow">▤</span>
+            <h3>{totalVersions}</h3>
+            <p>Versiones</p>
+          </div>
+
+          <div className="stat-card">
+            <span className="stat-icon green">✓</span>
+            <h3>{totalFinalVersions}</h3>
+            <p>Finalizadas</p>
+          </div>
+        </div>
+      </section>
       {showForm && (
         <div className="project-form">
           <h2>Crear nuevo proyecto</h2>
@@ -1391,10 +2061,8 @@ function App() {
               className="project-card"
               key={project.id}
               onClick={() => setSelectedProject(project)}
-              >
-              <div className="project-cover">
-                🎵
-              </div>
+            >
+              <ProjectCover project={project} />
 
               <div className="project-info">
                 <h3>{project.name}</h3>
