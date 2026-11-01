@@ -57,6 +57,240 @@ function ProjectCover({ project }) {
   )
 }
 
+// Comparador A/B sincronizado: audio cargado desde IndexedDB con sus IDs originales.
+function VersionComparator({ versions }) {
+  const [idA, setIdA] = useState(String(versions.at(-2)?.id ?? ''))
+  const [idB, setIdB] = useState(String(versions.at(-1)?.id ?? ''))
+  const [active, setActive] = useState('A')
+  const [playing, setPlaying] = useState(false)
+  const [position, setPosition] = useState(0)
+  const [durations, setDurations] = useState({ A: 0, B: 0 })
+  const [volumes, setVolumes] = useState({ A: 100, B: 100 })
+  const [urls, setUrls] = useState({ A: '', B: '' })
+  const [error, setError] = useState('')
+  const audioA = useRef(null)
+  const audioB = useRef(null)
+  const activeRef = useRef('A')
+  const actionId = useRef(0)
+  const switchingRef = useRef(false)
+  const positionRef = useRef(0)
+  const durationRef = useRef({ A: 0, B: 0 })
+
+  const commonDuration = durations.A > 0 && durations.B > 0
+    ? Math.min(durations.A, durations.B)
+    : 0
+  const ready = Boolean(urls.A && urls.B && commonDuration > 0)
+  const unequalDurations = ready && Math.abs(durations.A - durations.B) > 0.5
+
+  function players() { return { A: audioA.current, B: audioB.current } }
+  function syncPosition(time) {
+    positionRef.current = time
+    setPosition(time)
+  }
+  function clamp(time, max) {
+    return Math.max(0, Math.min(time, Math.max(0, max - 0.05)))
+  }
+  function stopPlayers() {
+    actionId.current += 1
+    audioA.current?.pause()
+    audioB.current?.pause()
+    switchingRef.current = false
+    setPlaying(false)
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    const allocated = []
+    async function load() {
+      stopPlayers()
+      setError('')
+      setUrls({ A: '', B: '' })
+      setDurations({ A: 0, B: 0 })
+      durationRef.current = { A: 0, B: 0 }
+      syncPosition(0)
+      const vA = versions.find(v => String(v.id) === idA)
+      const vB = versions.find(v => String(v.id) === idB)
+      if (!vA || !vB) { setError('Las versiones seleccionadas ya no existen.'); return }
+      // No convertir los IDs a números: IndexedDB distingue entre 123 y "123".
+      const [blobA, blobB] = await Promise.all([getAudio(vA.id), getAudio(vB.id)])
+      if (cancelled) return
+      if (!blobA || !blobB) {
+        setError('No se encontró uno de los audios en IndexedDB. Intenta abrir ambas versiones por separado.')
+        return
+      }
+      allocated.push(URL.createObjectURL(blobA), URL.createObjectURL(blobB))
+      if (!cancelled) setUrls({ A: allocated[0], B: allocated[1] })
+    }
+    load().catch(err => {
+      console.error('Error al cargar el comparador A/B:', err)
+      if (!cancelled) setError('Error leyendo los audios. Revisa la consola (F12).')
+    })
+    return () => {
+      cancelled = true
+      actionId.current += 1
+      allocated.forEach(url => URL.revokeObjectURL(url))
+    }
+  }, [idA, idB, versions])
+
+  useEffect(() => () => {
+    audioA.current?.pause()
+    audioB.current?.pause()
+  }, [])
+
+  useEffect(() => {
+    if (audioA.current) audioA.current.volume = volumes.A / 100
+    if (audioB.current) audioB.current.volume = volumes.B / 100
+  }, [volumes, urls])
+
+  function onMetadata(side, event) {
+    const length = event.currentTarget.duration
+    if (!Number.isFinite(length) || length <= 0) {
+      setError(`No se puede leer la duración del audio ${side}.`)
+      return
+    }
+    durationRef.current = { ...durationRef.current, [side]: length }
+    setDurations({ ...durationRef.current })
+    event.currentTarget.currentTime = 0
+  }
+
+  async function switchTo(next) {
+    if (next === activeRef.current || !ready || switchingRef.current) return
+    switchingRef.current = true
+    const ticket = ++actionId.current
+    const currentSide = activeRef.current
+    const p = players()
+    const source = p[currentSide]
+    const destination = p[next]
+    const resume = source && !source.paused && !source.ended
+    // Capturar el tiempo antes de pausar: es la referencia para ambas mezclas.
+    const aligned = clamp(source?.currentTime ?? positionRef.current, commonDuration)
+    source?.pause()
+    destination.pause()
+    destination.currentTime = aligned
+    activeRef.current = next
+    setActive(next)
+    syncPosition(aligned)
+    try {
+      if (resume) {
+        await destination.play()
+        if (ticket !== actionId.current) { destination.pause(); return }
+        setPlaying(true)
+      } else {
+        setPlaying(false)
+      }
+    } catch (err) {
+      console.error('No se pudo alternar la reproducción A/B:', err)
+      setPlaying(false)
+      setError('No se pudo reproducir esta versión. Intenta presionar Reproducir.')
+    } finally {
+      switchingRef.current = false
+    }
+  }
+
+  async function togglePlayback() {
+    if (!ready || switchingRef.current) return
+    const p = players()[activeRef.current]
+    if (!p) return
+    const ticket = ++actionId.current
+    if (!p.paused) {
+      p.pause()
+      setPlaying(false)
+      return
+    }
+    if (p.currentTime >= commonDuration - 0.04) seek(0)
+    try {
+      await p.play()
+      if (ticket !== actionId.current) { p.pause(); return }
+      setPlaying(true)
+      setError('')
+    } catch (err) {
+      console.error('No se pudo reproducir:', err)
+      setPlaying(false)
+      setError('El navegador no pudo reproducir el audio seleccionado.')
+    }
+  }
+
+  function seek(value) {
+    if (!ready) return
+    const newPosition = clamp(Number(value), commonDuration)
+    for (const player of Object.values(players())) {
+      if (player && player.readyState >= 1) player.currentTime = newPosition
+    }
+    syncPosition(newPosition)
+  }
+
+  function onTimeUpdate(side, event) {
+    if (side !== activeRef.current || !ready) return
+    const player = event.currentTarget
+    if (player.currentTime >= commonDuration - 0.025) {
+      player.pause()
+      setPlaying(false)
+      seek(commonDuration)
+      return
+    }
+    syncPosition(player.currentTime)
+  }
+
+  function timeLabel(seconds) {
+    if (!Number.isFinite(seconds)) return '0:00'
+    return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
+  }
+
+  const choices = versions.map(v => ({
+    value: String(v.id),
+    label: `v${v.number ?? '?'}${v.label ? ` · ${v.label}` : ''}`
+  }))
+
+  return (
+    <section className="ab-comparator" aria-label="Comparador de versiones A/B">
+      <div className="ab-heading">
+        <div><h2>Comparador A/B</h2><p>Alterna entre versiones desde el mismo punto de la canción.</p></div>
+        <span className="ab-tag">Escucha crítica</span>
+      </div>
+      <div className="ab-selectors">
+        <label>Versión A
+          <select value={idA} onChange={e => setIdA(e.target.value)}>
+            {choices.map(opt => <option key={opt.value} value={opt.value} disabled={opt.value === idB}>{opt.label}</option>)}
+          </select>
+        </label>
+        <label>Versión B
+          <select value={idB} onChange={e => setIdB(e.target.value)}>
+            {choices.map(opt => <option key={opt.value} value={opt.value} disabled={opt.value === idA}>{opt.label}</option>)}
+          </select>
+        </label>
+      </div>
+      <audio ref={audioA} src={urls.A || undefined} preload="auto"
+        onLoadedMetadata={event => onMetadata('A', event)}
+        onTimeUpdate={event => onTimeUpdate('A', event)}
+        onEnded={() => { if (activeRef.current === 'A') setPlaying(false) }} />
+      <audio ref={audioB} src={urls.B || undefined} preload="auto"
+        onLoadedMetadata={event => onMetadata('B', event)}
+        onTimeUpdate={event => onTimeUpdate('B', event)}
+        onEnded={() => { if (activeRef.current === 'B') setPlaying(false) }} />
+      <div className="ab-controls">
+        <button type="button" className="ab-play" onClick={togglePlayback} disabled={!ready}>{playing ? '⏸ Pausar' : '▶ Reproducir'}</button>
+        <div className="ab-toggle" role="group" aria-label="Versión audible">
+          <button type="button" aria-pressed={active === 'A'} className={active === 'A' ? 'selected' : ''} onClick={() => switchTo('A')} disabled={!ready}>A</button>
+          <button type="button" aria-pressed={active === 'B'} className={active === 'B' ? 'selected' : ''} onClick={() => switchTo('B')} disabled={!ready}>B</button>
+        </div>
+        <span className="ab-time">{timeLabel(position)} / {timeLabel(commonDuration)}</span>
+      </div>
+      <input className="ab-seek" aria-label="Posición de reproducción" type="range" min="0" max={Math.max(commonDuration, 0.01)} step="0.05" value={Math.min(position, Math.max(commonDuration, 0.01))} onChange={event => seek(event.target.value)} disabled={!ready} />
+      <div className="ab-volumes">
+        {['A', 'B'].map(side => (
+          <label key={side}>Volumen {side} · {volumes[side]}%
+            <input type="range" min="0" max="100" value={volumes[side]} onChange={event => setVolumes(current => ({ ...current, [side]: Number(event.target.value) }))} />
+          </label>
+        ))}
+      </div>
+      {unequalDurations && <p className="ab-duration-note">Las versiones duran {timeLabel(durations.A)} y {timeLabel(durations.B)}. La comparación se limita al tramo compartido ({timeLabel(commonDuration)}).</p>}
+      {!ready && !error && <p className="ab-hint">Preparando audios para comparar…</p>}
+      {error && <p className="ab-error" role="alert">{error}</p>}
+      <p className="ab-hint">La posición se conserva al alternar. La transición puede producir una pausa breve. El ajuste de volumen es manual, no una normalización LUFS.</p>
+    </section>
+  )
+}
+
 function App() {
 
   const waveformRef = useRef(null)
@@ -92,6 +326,8 @@ function App() {
   const [projectType, setProjectType] = useState('single')
 
   const [selectedProject, setSelectedProject] = useState(null)
+  const [showProjectSettings, setShowProjectSettings] = useState(false)
+  const [projectNameDraft, setProjectNameDraft] = useState('')
 
   const [selectedTrack, setSelectedTrack] = useState(null)
 
@@ -108,6 +344,16 @@ function App() {
   const [versionLabel, setVersionLabel] = useState('')
 
   const [commentText, setCommentText] = useState('')
+  const [commentFilter, setCommentFilter] = useState('all')
+  const [pendingUpload, setPendingUpload] = useState(null)
+  const [changeLog, setChangeLog] = useState('')
+  const [linkedCommentIds, setLinkedCommentIds] = useState([])
+  const [savingRevision, setSavingRevision] = useState(false)
+  const [reviewMode, setReviewMode] = useState(() => localStorage.getItem('demolab-review-mode') === 'artist')
+
+  useEffect(() => {
+    localStorage.setItem('demolab-review-mode', reviewMode ? 'artist' : 'studio')
+  }, [reviewMode])
 
 
 
@@ -120,6 +366,40 @@ function App() {
 
     return []
   })
+
+  // Historial local: se registra únicamente a partir de esta versión.
+  const [activity, setActivity] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('demolab-activity') ?? '[]')
+      return Array.isArray(saved) ? saved : []
+    } catch { return [] }
+  })
+
+  useEffect(() => {
+    localStorage.setItem('demolab-activity', JSON.stringify(activity))
+  }, [activity])
+
+  function recordActivity(type, project, description, trackId = null) {
+    if (!project) return
+    const entry = {
+      id: crypto.randomUUID(),
+      type,
+      projectId: project.id,
+      projectName: project.name,
+      trackId,
+      description,
+      at: new Date().toISOString()
+    }
+    setActivity(current => [entry, ...current].slice(0, 100))
+  }
+
+  function openActivity(entry) {
+    const project = projects.find(p => p.id === entry.projectId)
+    if (!project) return
+    setSelectedVersion(null)
+    setSelectedProject(project)
+    setSelectedTrack(project.tracks?.find(t => t.id === entry.trackId) ?? null)
+  }
 
   async function cleanOrphanAudios() {
     const validAudioIds = new Set()
@@ -259,6 +539,7 @@ function App() {
       version: 1,
       exportedAt: new Date().toISOString(),
       projects: projectsForBackup,
+      activity,
       audios
     }
 
@@ -468,6 +749,7 @@ function App() {
 
         // Restaurar proyectos
         setProjects(backup.projects)
+        setActivity(Array.isArray(backup.activity) ? backup.activity : [])
 
         setSelectedProject(null)
         setSelectedTrack(null)
@@ -516,105 +798,252 @@ function App() {
     }
 
     setProjects([...projects, newProject])
+    recordActivity('project', newProject, 'Proyecto creado')
     setProjectName('')
     setProjectType('single')
     setShowForm(false)
   }
-  async function handleAudioUpload(event) {
-    const file = event.target.files[0]
+  function openProjectSettings() {
+    setProjectNameDraft(selectedProject?.name ?? '')
+    setShowProjectSettings(true)
+  }
 
-    if (!file) {
+  function saveProjectName() {
+    if (!selectedProject) return
+    const name = projectNameDraft.trim()
+    if (!name) {
+      alert('Escribe un nombre para el proyecto.')
       return
     }
-
-    const versionId = Date.now()
-
-    await saveAudio(versionId, file)
-
-
-    const audioUrl = URL.createObjectURL(file)
-
-    const nextVersionNumber =
-      selectedProject.nextVersionNumber ?? 1
-
-    const newVersion = {
-      id: versionId,
-      number: nextVersionNumber,
-      label: '',
-      audio: audioUrl,
-      comments: [],
-      createdAt: new Date().toISOString(),
-      status: 'demo'
-    }
-
-    const updatedProject = {
-      ...selectedProject,
-      versions: [...selectedProject.versions, newVersion],
-      nextVersionNumber: nextVersionNumber + 1
-    }
-
-    setProjects(
-      projects.map((project) => 
-        project.id === selectedProject.id
-          ? updatedProject
-          : project
-      )
-    )
-
+    const updatedProject = { ...selectedProject, name }
+    setProjects(current => current.map(project =>
+      project.id === selectedProject.id ? updatedProject : project
+    ))
     setSelectedProject(updatedProject)
   }
 
-  async function handleTrackAudioUpload(event) {
-    const file = event.target.files[0]
+  // Cambiar el tipo conservando los audios y sus metadatos.
+  // En DemoLab, sencillos/beats guardan versiones en project.versions;
+  // EP/álbumes guardan versiones dentro de project.tracks.
+  function changeProjectType(nextType) {
+    const allowedTypes = ['single', 'ep', 'album', 'beat']
+    if (!selectedProject || !allowedTypes.includes(nextType)) return
 
-    if (!file) {
-      return
+    const oldType = selectedProject.type
+    if (nextType === oldType) return
+
+    const wasRelease = oldType === 'ep' || oldType === 'album'
+    const willBeRelease = nextType === 'ep' || nextType === 'album'
+    const currentTracks = selectedProject.tracks ?? []
+    const currentVersions = selectedProject.versions ?? []
+    let updatedProject = { ...selectedProject, type: nextType }
+
+    if (wasRelease && !willBeRelease) {
+      if (currentTracks.length > 1) {
+        alert('Este proyecto tiene varias canciones. Para convertirlo en sencillo o beat debe tener como máximo una. No se ha cambiado ni eliminado ningún dato.')
+        return
+      }
+      if (currentTracks.length === 1 && currentVersions.length > 0) {
+        alert('Hay versiones guardadas tanto en el proyecto como en su canción. Para evitar perder datos, no se puede convertir automáticamente.')
+        return
+      }
+      const track = currentTracks[0]
+      updatedProject = {
+        ...updatedProject,
+        versions: track ? (track.versions ?? []) : currentVersions,
+        nextVersionNumber: track
+          ? (track.nextVersionNumber ?? (track.versions?.length ?? 0) + 1)
+          : (selectedProject.nextVersionNumber ?? currentVersions.length + 1),
+        tracks: [],
+        // Conservamos nombre, ID y estado para volver a EP/álbum sin perderlos.
+        singleTrackInfo: track
+          ? { id: track.id, name: track.name, status: track.status }
+          : (selectedProject.singleTrackInfo ?? null)
+      }
+    } else if (!wasRelease && willBeRelease) {
+      if (currentTracks.length > 0) {
+        alert('Ya hay canciones almacenadas en este proyecto. Para evitar datos duplicados, no se ha realizado la conversión.')
+        return
+      }
+      const saved = selectedProject.singleTrackInfo
+      const versions = currentVersions
+      const track = (saved || versions.length > 0) ? {
+        id: saved?.id ?? crypto.randomUUID(),
+        name: saved?.name ?? selectedProject.name,
+        status: saved?.status ?? (versions.some(v => v.status === 'final') ? 'final' : 'demo'),
+        versions,
+        nextVersionNumber: selectedProject.nextVersionNumber ?? versions.length + 1
+      } : null
+      updatedProject = {
+        ...updatedProject,
+        versions: [],
+        tracks: track ? [track] : [],
+        singleTrackInfo: null
+      }
     }
 
-    const versionId = Date.now()
+    const labels = { single: 'Sencillo', ep: 'EP', album: 'Álbum', beat: 'Beat' }
+    const message = `¿Cambiar «${selectedProject.name}» de ${labels[oldType] ?? oldType} a ${labels[nextType]}?` +
+      (wasRelease !== willBeRelease ? '\n\nLas versiones se reorganizarán sin eliminar los archivos ni los comentarios.' : '')
+    if (!window.confirm(message)) return
 
-    await saveAudio(versionId, file)
+    // Al volver a las canciones del proyecto, evitamos conservar una selección obsoleta.
+    releaseAudioRef.current?.pause()
+    setReleaseIndex(-1)
+    setReleaseQueue([])
+    setIsReleasePlaying(false)
+    setSelectedTrack(null)
+    setSelectedVersion(null)
+    setPendingUpload(null)
+    setProjects(current => current.map(project =>
+      project.id === selectedProject.id ? updatedProject : project
+    ))
+    setSelectedProject(updatedProject)
+  }
 
-    const audioUrl = URL.createObjectURL(file)
+  // Seleccionar un audio abre primero el formulario del historial.
+  function prepareVersionUpload(event, scope) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    setPendingUpload({ file, scope })
+    setChangeLog('')
+    setLinkedCommentIds([])
+  }
 
-    const nextVersionNumber =
-      selectedTrack.nextVersionNumber ?? 1
+  function cancelVersionUpload() {
+    setPendingUpload(null)
+    setChangeLog('')
+    setLinkedCommentIds([])
+  }
 
+  // El vínculo conserva una copia del comentario, incluso si luego se modifica.
+  async function confirmVersionUpload() {
+    if (!pendingUpload || savingRevision) return
+    const { file, scope } = pendingUpload
+    const trackScope = scope === 'track'
+    const owner = trackScope ? selectedTrack : selectedProject
+    const oldVersions = owner.versions ?? []
+    const previousVersion = oldVersions[oldVersions.length - 1]
+    const previousComments = previousVersion?.comments ?? []
+    const corrections = previousComments.filter((comment) =>
+      linkedCommentIds.includes(comment.id) && !comment.resolved
+    )
+    const versionId = crypto.randomUUID()
     const newVersion = {
       id: versionId,
-      number: nextVersionNumber,
+      number: owner.nextVersionNumber ?? oldVersions.length + 1,
       label: '',
-      audio: audioUrl,
+      audio: null,
       comments: [],
       createdAt: new Date().toISOString(),
-      status: 'demo'
+      status: 'demo',
+      changeLog: changeLog.trim(),
+      basedOnVersionId: previousVersion?.id ?? null,
+      revisionLinks: corrections.map((comment) => ({
+        commentId: comment.id,
+        text: comment.text,
+        timestamp: comment.timestamp,
+        sourceVersionId: previousVersion.id,
+        sourceVersionNumber: previousVersion.number
+      }))
     }
-
-    const updatedTrack = {
-      ...selectedTrack,
-      versions: [...selectedTrack.versions, newVersion],
-      nextVersionNumber: nextVersionNumber + 1
-    }
-
-    const updatedProject = {
-      ...selectedProject,
-      tracks: selectedProject.tracks.map((track) =>
-        track.id === selectedTrack.id
-          ? updatedTrack
-          : track
+    setSavingRevision(true)
+    try {
+      await saveAudio(versionId, file)
+      const versions = oldVersions.map((version) =>
+        version.id === previousVersion?.id
+          ? {
+              ...version,
+              comments: (version.comments ?? []).map((comment) =>
+                corrections.some((item) => item.id === comment.id)
+                  ? { ...comment, resolved: true, resolvedInVersionId: versionId }
+                  : comment
+              )
+            }
+          : version
       )
+      const updatedOwner = {
+        ...owner,
+        versions: [...versions, newVersion],
+        nextVersionNumber: newVersion.number + 1
+      }
+      const updatedProject = trackScope
+        ? {
+            ...selectedProject,
+            tracks: selectedProject.tracks.map((track) =>
+              track.id === selectedTrack.id ? updatedOwner : track
+            )
+          }
+        : updatedOwner
+      setProjects((current) => current.map((project) =>
+        project.id === selectedProject.id ? updatedProject : project
+      ))
+      setSelectedProject(updatedProject)
+      if (trackScope) setSelectedTrack(updatedOwner)
+      recordActivity('version', updatedProject, `Nueva versión v${newVersion.number}${trackScope ? ` de ${selectedTrack.name}` : ''}`, trackScope ? selectedTrack.id : null)
+      cancelVersionUpload()
+    } catch (error) {
+      console.error('Error al guardar la nueva versión:', error)
+      alert('No se pudo guardar el audio. El formulario sigue abierto para reintentar.')
+    } finally {
+      setSavingRevision(false)
     }
+  }
 
-    setProjects(
-      projects.map((project) =>
-        project.id === selectedProject.id
-          ? updatedProject
-          : project
-      )
+  function renderRevisionUpload(scope) {
+    if (pendingUpload?.scope !== scope) return null
+    const owner = scope === 'track' ? selectedTrack : selectedProject
+    const previousVersion = owner.versions?.at(-1)
+    const pendingComments = (previousVersion?.comments ?? []).filter(
+      (comment) => !comment.resolved
     )
-
-    setSelectedProject(updatedProject)
-    setSelectedTrack(updatedTrack)
+    return (
+      <section className="revision-upload-panel">
+        <h3>Registrar nueva versión</h3>
+        <p className="revision-muted">Audio: {pendingUpload.file.name}</p>
+        <label htmlFor="revision-change-log">¿Qué cambió en esta versión?</label>
+        <textarea
+          id="revision-change-log"
+          rows={3}
+          placeholder="Ej.: Ajusté el volumen de la voz y reduje la saturación del 808..."
+          value={changeLog}
+          onChange={(event) => setChangeLog(event.target.value)}
+        />
+        {previousVersion && (
+          <div className="revision-corrections">
+            <h4>Comentarios pendientes de v{previousVersion.number}</h4>
+            {pendingComments.length ? (
+              <>
+                <p className="revision-muted">Marca solo las correcciones que realizaste. Al guardar, esos comentarios quedarán resueltos en la versión anterior.</p>
+                {pendingComments.map((comment) => (
+                  <label className="revision-checkbox" key={comment.id}>
+                    <input
+                      type="checkbox"
+                      checked={linkedCommentIds.includes(comment.id)}
+                      onChange={(event) => setLinkedCommentIds((current) =>
+                        event.target.checked
+                          ? [...current, comment.id]
+                          : current.filter((id) => id !== comment.id)
+                      )}
+                    />
+                    <span>{formatTime(comment.timestamp)} — {comment.text}</span>
+                  </label>
+                ))}
+              </>
+            ) : <p className="revision-muted">No hay comentarios pendientes en la versión anterior.</p>}
+          </div>
+        )}
+        <div className="revision-upload-actions">
+          <button type="button" onClick={confirmVersionUpload} disabled={savingRevision}>
+            {savingRevision ? 'Guardando…' : 'Guardar versión e historial'}
+          </button>
+          <button type="button" onClick={cancelVersionUpload} disabled={savingRevision}>
+            Cancelar
+          </button>
+        </div>
+      </section>
+    )
   }
 
   function addTrack() {
@@ -625,6 +1054,7 @@ function App() {
     const newTrack = {
       id: Date.now(),
       name: trackName.trim(),
+      status: 'demo',
       versions: [],
       nextVersionNumber: 1
     }
@@ -651,6 +1081,40 @@ function App() {
     setEditingTrackId(track.id)
     setEditingTrackName(track.name)
   }
+
+  function updateTrackStatus(trackId, newStatus) {
+    const updatedProject = {
+      ...selectedProject,
+      tracks: selectedProject.tracks.map((track) =>
+        track.id === trackId
+          ? { ...track, status: newStatus }
+          : track
+      )
+    }
+
+    setProjects((currentProjects) =>
+      currentProjects.map((project) =>
+        project.id === selectedProject.id
+          ? updatedProject
+          : project
+      )
+    )
+
+    setSelectedProject(updatedProject)
+    const oldTrack = selectedProject.tracks.find(track => track.id === trackId)
+    if (oldTrack && oldTrack.status !== newStatus) {
+      const labels = { demo: 'Demo', production: 'En producción', review: 'En revisión', mixing: 'En mezcla', mastering: 'En masterización', final: 'Finalizada' }
+      recordActivity('status', updatedProject, `${oldTrack.name}: ${labels[newStatus] ?? newStatus}`, trackId)
+    }
+
+    if (selectedTrack?.id === trackId) {
+      setSelectedTrack((current) => ({
+        ...current,
+        status: newStatus
+      }))
+    }
+  }
+
 
   function saveTrackName(trackId) {
     const newName = editingTrackName.trim()
@@ -774,40 +1238,40 @@ function App() {
   
     //Borrar proyecto
   async function deleteProject(projectId) {
-    const confirmDelete = window.confirm(
-      '¿Seguro que quieres eliminar este proyecto? Se eliminarán todas sus versiones, canciones, audios y comentarios.'
-    )
-
-    if (!confirmDelete) return
-
-    const projectToDelete = projects.find(
-      (project) => project.id === projectId
-    )
-
+    const projectToDelete = projects.find((project) => project.id === projectId)
     if (!projectToDelete) return
 
-    // Borrar versiones directas del proyecto
-    for (const version of projectToDelete.versions ?? []) {
-      await deleteAudio(version.id)
-    }
-
-    // Borrar versiones de todas las canciones del EP/Álbum
-    for (const track of projectToDelete.tracks ?? []) {
-      for (const version of track.versions ?? []) {
-        await deleteAudio(version.id)
-      }
-    }
-
-    setProjects((currentProjects) =>
-      currentProjects.filter(
-        (project) => project.id !== projectId
-      )
+    const confirmDelete = window.confirm(
+      `¿Eliminar definitivamente "${projectToDelete.name}"?\n\nSe borrarán el proyecto, sus canciones, versiones, audios, comentarios y portada. Esta acción no se puede deshacer.`
     )
+    if (!confirmDelete) return
 
-    if (selectedProject?.id === projectId) {
-      setSelectedProject(null)
-      setSelectedTrack(null)
-      setSelectedVersion(null)
+    try {
+      const audioIds = new Set([
+        ...(projectToDelete.versions ?? []).map((version) => version.id),
+        ...(projectToDelete.tracks ?? []).flatMap((track) =>
+          (track.versions ?? []).map((version) => version.id)
+        )
+      ])
+
+      for (const audioId of audioIds) {
+        await deleteAudio(audioId)
+      }
+      await deleteCover(projectId)
+
+      setProjects((currentProjects) =>
+        currentProjects.filter((project) => project.id !== projectId)
+      )
+      setActivity(current => current.filter(item => item.projectId !== projectId))
+
+      if (selectedProject?.id === projectId) {
+        setSelectedProject(null)
+        setSelectedTrack(null)
+        setSelectedVersion(null)
+      }
+    } catch (error) {
+      console.error('No se pudo eliminar el proyecto:', error)
+      alert('No se pudo completar la eliminación. Revisa la consola e inténtalo de nuevo.')
     }
   }
 
@@ -878,6 +1342,10 @@ function App() {
     }
 
     updateVersionInCurrentContext(updatedVersion)
+    if (versionToUpdate.status !== newStatus) {
+      const label = {demo:'Demo', review:'En revisión', approved:'Aprobada', final:'Final'}[newStatus] ?? newStatus
+      recordActivity('status', selectedProject, `Versión v${versionToUpdate.number}: ${label}`, selectedTrack?.id ?? null)
+    }
   }
 
   function updateVersionInCurrentContext(updatedVersion) {
@@ -924,7 +1392,7 @@ function App() {
 
     setSelectedProject(updatedProject)
     if (selectedVersion?.id === updatedVersion.id) {
-      setSelectedVersion(updatedVersion)
+      setSelectedVersion(current => ({ ...updatedVersion, audio: current?.audio ?? null }))
     }
     
   }
@@ -941,7 +1409,8 @@ function App() {
     const newComment = {
       id: Date.now(),
       text: commentText,
-      timestamp: timestamp
+      timestamp: timestamp,
+      resolved: false
     }
 
     const updatedVersion = {
@@ -953,11 +1422,25 @@ function App() {
     }
 
     updateVersionInCurrentContext(updatedVersion)
+    recordActivity('comment', selectedProject, `Nuevo comentario en v${selectedVersion.number}: ${commentText.trim().slice(0, 90)}`, selectedTrack?.id ?? null)
 
     setCommentText('')
   }
 
     //Borrar comentario
+  function toggleCommentResolved(commentId) {
+    const updatedVersion = {
+      ...selectedVersion,
+      comments: (selectedVersion.comments ?? []).map((comment) =>
+        comment.id === commentId
+          ? { ...comment, resolved: !comment.resolved }
+          : comment
+      )
+    }
+
+    updateVersionInCurrentContext(updatedVersion)
+  }
+
   function deleteComment(commentId) {
     const updatedVersion = {
       ...selectedVersion,
@@ -1135,6 +1618,12 @@ function App() {
           ← Volver al proyecto
         </button>
 
+        <div className="review-mode-switch" role="group" aria-label="Modo de visualización">
+          <button type="button" className={!reviewMode ? 'selected' : ''} aria-pressed={!reviewMode} onClick={() => setReviewMode(false)}>Vista estudio</button>
+          <button type="button" className={reviewMode ? 'selected' : ''} aria-pressed={reviewMode} onClick={() => setReviewMode(true)}>Vista artista</button>
+        </div>
+        {reviewMode && <p className="review-intro">Escucha la canción, comenta en el segundo que quieras y decide si esta versión está lista.</p>}
+
         <header className="version-header">
           <p className="project-label">
             {selectedProject.name}
@@ -1148,6 +1637,24 @@ function App() {
             {selectedVersion.label && ` - ${selectedVersion.label}`}
           </h1>
         </header>
+
+        {!reviewMode && (selectedVersion.changeLog || (selectedVersion.revisionLinks ?? []).length > 0) && (
+          <section className="revision-history-card">
+            <h2>Historial de esta versión</h2>
+            {selectedVersion.basedOnVersionId && <p className="revision-muted">Cambios respecto de la versión anterior</p>}
+            {selectedVersion.changeLog && <p className="revision-notes">{selectedVersion.changeLog}</p>}
+            {(selectedVersion.revisionLinks ?? []).length > 0 && (
+              <div>
+                <h3>Correcciones registradas ({selectedVersion.revisionLinks.length})</h3>
+                <ul>{selectedVersion.revisionLinks.map((item) => (
+                  <li key={`${item.sourceVersionId}-${item.commentId}`}>
+                    <strong>v{item.sourceVersionNumber} · {formatTime(item.timestamp)}</strong> — {item.text}
+                  </li>
+                ))}</ul>
+              </div>
+            )}
+          </section>
+        )}
 
         {selectedVersion.audio ? (
           <section className="player-card">
@@ -1163,7 +1670,7 @@ function App() {
                   selectedVersion.comments.map((comment, index) => (
                     <button
                       key={comment.id}
-                      className="comment-marker"
+                      className={`comment-marker ${comment.resolved ? 'comment-marker-resolved' : ''}`}
                       style={{
                           left: `${(comment.timestamp / duration) * 100}%`
                       }}
@@ -1179,6 +1686,9 @@ function App() {
                         </span>
 
                         <p>{comment.text}</p>
+                        <span className="tooltip-comment-status">
+                          {comment.resolved ? 'Resuelto' : 'Pendiente'}
+                        </span>
                       </div>
                     </button>
                   ))
@@ -1203,15 +1713,32 @@ function App() {
           <p>Esta versión todavía no tiene audio.</p>
         )}
 
+        {reviewMode && (
+          <section className="artist-decision" aria-label="Decisión sobre esta versión">
+            <h2>¿Qué te pareció esta versión?</h2>
+            <p>Tu decisión se guarda en el estado de la versión. Puedes cambiarla después.</p>
+            <div className="artist-decision-buttons">
+              <button type="button" className={selectedVersion.status === 'approved' ? 'active' : ''} aria-pressed={selectedVersion.status === 'approved'} onClick={() => updateVersionStatus(selectedVersion.id, 'approved')}>✓ Me gusta, aprobada</button>
+              <button type="button" className={selectedVersion.status === 'review' ? 'active' : ''} aria-pressed={selectedVersion.status === 'review'} onClick={() => updateVersionStatus(selectedVersion.id, 'review')}>✎ Quiero solicitar cambios</button>
+            </div>
+            <p className="artist-decision-note">{selectedVersion.status === 'approved' ? 'Esta versión está aprobada.' : selectedVersion.status === 'review' ? 'Esta versión está en revisión. Deja tus indicaciones abajo.' : 'Aún no has tomado una decisión sobre esta versión.'}</p>
+          </section>
+        )}
+
         <section className="feedback-section">
 
-          <h2>Feedback</h2>
+          <h2>{reviewMode ? 'Tus comentarios' : 'Feedback'}</h2>
+
+          <div className="feedback-overview">
+            <span>{selectedVersion.comments?.filter((comment) => !comment.resolved).length ?? 0} pendientes</span>
+            <span>{selectedVersion.comments?.filter((comment) => comment.resolved).length ?? 0} resueltos</span>
+          </div>
 
           <div className="comment-form">
 
             <input
               type="text"
-              placeholder="Escribe un comentario..."
+              placeholder={reviewMode ? "Escribe qué cambiarías en este momento..." : "Escribe un comentario..."}
               value={commentText}
               onChange={(event) => setCommentText(event.target.value)}
               onKeyDown={(event) => {
@@ -1227,15 +1754,41 @@ function App() {
 
           </div>
 
+          <div className="comment-filters" aria-label="Filtrar comentarios">
+            {[
+              ['all', 'Todos'],
+              ['pending', 'Pendientes'],
+              ['resolved', 'Resueltos']
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={commentFilter === value ? 'active' : ''}
+                aria-pressed={commentFilter === value}
+                onClick={() => setCommentFilter(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
           <div className="comments">
 
-            {selectedVersion.comments.length === 0 ? (
-              <p>Todavía no hay comentarios.
-
-              </p>
+            {(selectedVersion.comments ?? []).length === 0 ? (
+              <p className="empty-comments">Todavía no hay comentarios.</p>
+            ) : (selectedVersion.comments ?? []).filter((comment) =>
+                commentFilter === 'all' ||
+                (commentFilter === 'resolved' ? !!comment.resolved : !comment.resolved)
+              ).length === 0 ? (
+              <p className="empty-comments">No hay comentarios en este filtro.</p>
             ) : (
-              selectedVersion.comments.map((comment) => (
-                <div className="comment" key={comment.id}>
+              (selectedVersion.comments ?? [])
+                .filter((comment) =>
+                  commentFilter === 'all' ||
+                  (commentFilter === 'resolved' ? !!comment.resolved : !comment.resolved)
+                )
+                .map((comment) => (
+                <div className={`comment ${comment.resolved ? 'comment-resolved' : ''}`} key={comment.id}>
 
                   <button
                     className="comment-time"
@@ -1245,6 +1798,16 @@ function App() {
                     </button>
                   
                   <p>{comment.text}</p>
+
+                  <button
+                    type="button"
+                    className={`comment-resolve-button ${comment.resolved ? 'is-resolved' : ''}`}
+                    onClick={() => toggleCommentResolved(comment.id)}
+                    aria-label={comment.resolved ? 'Marcar comentario como pendiente' : 'Marcar comentario como resuelto'}
+                    title={comment.resolved ? 'Volver a pendiente' : 'Marcar como resuelto'}
+                  >
+                    {comment.resolved ? '✓ Resuelto' : '○ Pendiente'}
+                  </button>
 
                   <button
                     className="delete-comment"
@@ -1310,13 +1873,33 @@ function App() {
             <input 
               type="file"
               accept="audio/*"
-              onChange={handleTrackAudioUpload}
+              onChange={(event) => prepareVersionUpload(event, 'track')}
               hidden
            />
           </label>
         </header>
 
+        <div className="track-detail-status">
+          <label htmlFor="selected-track-status">Estado de la canción</label>
+          <select
+            id="selected-track-status"
+            value={selectedTrack.status ?? 'demo'}
+            onChange={(event) =>
+              updateTrackStatus(selectedTrack.id, event.target.value)
+            }
+          >
+            <option value="demo">Demo</option>
+            <option value="production">En producción</option>
+            <option value="review">En revisión</option>
+            <option value="mixing">En mezcla</option>
+            <option value="mastering">En masterización</option>
+            <option value="final">Finalizada</option>
+          </select>
+        </div>
 
+        {renderRevisionUpload('track')}
+
+        {selectedTrack.versions.length >= 2 && <VersionComparator key={selectedTrack.id} versions={selectedTrack.versions} />}
 
         <h2>Versiones</h2>
 
@@ -1398,7 +1981,16 @@ function App() {
 
                   </div>
 
-                  <p className="version-date">
+                  {(version.changeLog || (version.revisionLinks ?? []).length > 0) && (
+                    <div className="revision-card-summary">
+                      {version.changeLog && <p>{version.changeLog}</p>}
+                      {(version.revisionLinks ?? []).length > 0 && (
+                        <small>✓ {version.revisionLinks.length} correcciones registradas</small>
+                      )}
+                    </div>
+                  )}
+
+                <p className="version-date">
                     {version.createdAt
                       ? new Date(version.createdAt).toLocaleString('es-CL')
                       : 'Fecha no disponible'}
@@ -1495,7 +2087,7 @@ function App() {
               <input
                 type="file" 
                 accept="audio/*"
-                onChange={handleAudioUpload}
+                onChange={(event) => prepareVersionUpload(event, 'project')}
                 hidden
               />
             </label>
@@ -1503,36 +2095,67 @@ function App() {
 
         </header>
 
-        <div className="project-cover-section">
-
-          {projectCover ? (
-            <img
-              src={projectCover}
-              alt={`Portada de ${selectedProject.name}`}
-              className="project-cover-image"
-            />
-          ) : (
-            <div className="project-cover-placeholder">
-              🎵
+        <section className="project-settings">
+          <button
+            type="button"
+            className="project-settings-toggle"
+            aria-expanded={showProjectSettings}
+            onClick={() => showProjectSettings ? setShowProjectSettings(false) : openProjectSettings()}
+          >
+            ⚙ Configuración del proyecto {showProjectSettings ? '▴' : '▾'}
+          </button>
+          {showProjectSettings && (
+            <div className="project-settings-panel">
+              <div className="project-settings-field">
+                <label htmlFor="settings-project-name">Nombre del proyecto</label>
+                <div className="project-settings-name-row">
+                  <input
+                    id="settings-project-name"
+                    type="text"
+                    maxLength={150}
+                    value={projectNameDraft}
+                    onChange={(event) => setProjectNameDraft(event.target.value)}
+                    onKeyDown={(event) => { if (event.key === 'Enter') saveProjectName() }}
+                  />
+                  <button type="button" onClick={saveProjectName} disabled={!projectNameDraft.trim() || projectNameDraft.trim() === selectedProject.name}>
+                    Guardar nombre
+                  </button>
+                </div>
+              </div>
+              <div className="project-settings-field">
+                <label htmlFor="edit-project-type">Tipo de proyecto</label>
+                <select
+                  id="edit-project-type"
+                  value={selectedProject.type}
+                  onChange={(event) => changeProjectType(event.target.value)}
+                >
+                  <option value="single">Sencillo</option>
+                  <option value="ep">EP</option>
+                  <option value="album">Álbum</option>
+                  <option value="beat">Beat</option>
+                </select>
+                <p>Si cambias entre sencillo y EP/álbum, conservaremos las versiones y comentarios. Los proyectos con varias canciones no se convertirán en sencillo automáticamente.</p>
+              </div>
+              <div className="project-settings-field">
+                <label>Portada del proyecto</label>
+                <label className="cover-upload-button">
+                  {projectCover ? 'Cambiar portada' : '+ Añadir portada'}
+                  <input type="file" accept="image/*" onChange={handleCoverUpload} hidden />
+                </label>
+              </div>
             </div>
           )}
+        </section>
 
-          {selectedProject.type !== 'beat' && (
-            <label className="cover-upload-button">
-              {projectCover ? 'Cambiar portada' : '+ Añadir portada'}
-
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handleCoverUpload}
-                hidden
-              />
-            </label>
+        <div className="project-cover-section">
+          {projectCover ? (
+            <img src={projectCover} alt={`Portada de ${selectedProject.name}`} className="project-cover-image" />
+          ) : (
+            <div className="project-cover-placeholder">🎵</div>
           )}
-
         </div>
-        
-      {/* Tarjetas */}
+
+{/* Tarjetas */}
 
       {isRelease ? (
         <>
@@ -1623,6 +2246,27 @@ function App() {
                     <p>
                       {track.versions.length} versiones
                     </p>
+
+
+                    <div
+                      className="track-status"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <select
+                        value={track.status ?? 'demo'}
+                        onChange={(event) =>
+                          updateTrackStatus(track.id, event.target.value)
+                        }
+                      >
+                        <option value="demo">Demo</option>
+                        <option value="production">En producción</option>
+                        <option value="review">En revisión</option>
+                        <option value="mixing">En mezcla</option>
+                        <option value="mastering">En masterización</option>
+                        <option value="final">Finalizada</option>
+                      </select>
+                    </div>
+
 
                   </div>
 
@@ -1779,6 +2423,42 @@ function App() {
     <>
   
 
+        {renderRevisionUpload('project')}
+
+        {selectedProject.singleTrackInfo && (
+          <section className="converted-single-info">
+            <p className="converted-single-label">Canción conservada del EP o álbum</p>
+            <h2>{selectedProject.singleTrackInfo.name}</h2>
+            <label htmlFor="converted-single-status">Estado de la canción</label>
+            <select
+              id="converted-single-status"
+              value={selectedProject.singleTrackInfo.status ?? 'demo'}
+              onChange={(event) => {
+                const updated = {
+                  ...selectedProject,
+                  singleTrackInfo: {
+                    ...selectedProject.singleTrackInfo,
+                    status: event.target.value
+                  }
+                }
+                setProjects(current => current.map(project =>
+                  project.id === updated.id ? updated : project
+                ))
+                setSelectedProject(updated)
+              }}
+            >
+              <option value="demo">Demo</option>
+              <option value="production">En producción</option>
+              <option value="review">En revisión</option>
+              <option value="mixing">En mezcla</option>
+              <option value="mastering">En masterización</option>
+              <option value="final">Finalizada</option>
+            </select>
+          </section>
+        )}
+
+        {selectedProject.versions.length >= 2 && <VersionComparator key={selectedProject.id} versions={selectedProject.versions} />}
+
         <h2>Versiones</h2>
 
         <div className="versions">
@@ -1862,6 +2542,15 @@ function App() {
 
                   </div>
 
+                    {(version.changeLog || (version.revisionLinks ?? []).length > 0) && (
+                    <div className="revision-card-summary">
+                      {version.changeLog && <p>{version.changeLog}</p>}
+                      {(version.revisionLinks ?? []).length > 0 && (
+                        <small>✓ {version.revisionLinks.length} correcciones registradas</small>
+                      )}
+                    </div>
+                  )}
+
                 <p className="version-date">
                   {version.createdAt
                     ? new Date(version.createdAt).toLocaleString('es-CL')
@@ -1924,6 +2613,54 @@ function App() {
       </main>
     )
   }
+
+  function getProjectStats(project) {
+    const isRelease =
+      project.type === 'ep' ||
+      project.type === 'album'
+
+    const tracks = project.tracks ?? []
+
+    const versions = isRelease
+      ? tracks.flatMap((track) => track.versions ?? [])
+      : project.versions ?? []
+
+    const comments = versions.reduce(
+      (total, version) =>
+        total + (version.comments?.length ?? 0),
+      0
+    )
+
+    const finalVersions = versions.filter(
+      (version) => version.status === 'final'
+    ).length
+
+    let progress = 0
+    let completedTracks = 0
+
+    if (isRelease) {
+
+      completedTracks = tracks.filter((track) => track.status === 'final').length
+
+      progress = tracks.length > 0
+        ? Math.round(
+            (completedTracks / tracks.length) * 100
+          )
+        : 0
+    } else {
+      progress = finalVersions > 0 || project.singleTrackInfo?.status === 'final' ? 100 : 0
+    }
+
+    return {
+      isRelease,
+      tracks: tracks.length,
+      versions: versions.length,
+      comments,
+      completedTracks,
+      progress
+    }
+  }
+
   /*Dashboard Principal */
 
   const totalProjects = projects.length
@@ -1942,8 +2679,11 @@ function App() {
 
   const totalVersions = allVersions.length
 
-  const totalFinalVersions = allVersions.filter(
-    (version) => version.status === 'final'
+  // Un proyecto está finalizado cuando su progreso llega al 100%.
+  // En EP/álbum esto exige que todas sus canciones estén finalizadas;
+  // en sencillos/beats, que al menos una versión esté marcada como final.
+  const totalFinalProjects = projects.filter((project) =>
+    getProjectStats(project).progress === 100
   ).length
 
   return (
@@ -2005,10 +2745,26 @@ function App() {
 
           <div className="stat-card">
             <span className="stat-icon green">✓</span>
-            <h3>{totalFinalVersions}</h3>
-            <p>Finalizadas</p>
+            <h3>{totalFinalProjects}</h3>
+            <p>Proyectos finalizados</p>
           </div>
         </div>
+      </section>
+      <section className="activity-section" aria-label="Actividad reciente">
+        <div className="activity-heading"><h2>Actividad reciente</h2><span>Últimos movimientos</span></div>
+        {activity.filter(entry => projects.some(p => p.id === entry.projectId)).length === 0 ? (
+          <p className="activity-empty">Todavía no hay actividad registrada. Las próximas versiones, comentarios y cambios de estado aparecerán aquí.</p>
+        ) : (
+          <div className="activity-list">
+            {activity.filter(entry => projects.some(p => p.id === entry.projectId)).slice(0, 8).map(entry => (
+              <button type="button" className="activity-item" key={entry.id} onClick={() => openActivity(entry)}>
+                <span className="activity-symbol" aria-hidden="true">{{ version: '♫', comment: '💬', status: '✓', project: '◈' }[entry.type] ?? '•'}</span>
+                <span className="activity-content"><strong>{entry.description}</strong><span>{projects.find(p => p.id === entry.projectId)?.name ?? entry.projectName}</span></span>
+                <time dateTime={entry.at}>{new Date(entry.at).toLocaleString('es-CL', { dateStyle: 'short', timeStyle: 'short' })}</time>
+              </button>
+            ))}
+          </div>
+        )}
       </section>
       {showForm && (
         <div className="project-form">
@@ -2056,7 +2812,10 @@ function App() {
         <h2>Tus proyectos</h2>
 
         <div className="projects">
-          {projects.map((project) => (
+          {projects.map((project) => {
+            const stats = getProjectStats(project)
+
+            return (
             <article
               className="project-card"
               key={project.id}
@@ -2077,57 +2836,63 @@ function App() {
                     : 'Single'}
                 </span>
 
-                <p>
-                  {project.versions.length > 0
-                    ? (() => {
-                      const latestVersion =
-                        project.versions[project.versions.length - 1]
 
-                      const versionName = latestVersion.number
-                        ? `v${latestVersion.number}`
-                        : latestVersion.name
+                  <div className="project-details">
+                    <p>
+                      {stats.isRelease
+                        ? `${stats.tracks} canciones · ${stats.versions} versiones`
+                        : `${stats.versions} versiones`}
+                    </p>
 
-                      return `Última versión: ${versionName}${
-                        latestVersion.label
-                          ?` - ${latestVersion.label}`
-                          : ''
-                      }`
-                    })()
-                  : 'Sin versiones todavía'
-                  }
-                </p>
+                    <p>💬 {stats.comments} comentarios</p>
+                  </div>
 
-                <span>
-                  💬 {project.comments} comentarios
-                </span>
+                  <div className="project-progress">
+                    <div className="progress-header">
+                      <span>Progreso</span>
+                      <span>{stats.progress}%</span>
+                    </div>
+
+                    <div
+                      className="progress-track"
+                      role="progressbar"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={stats.progress}
+                    >
+                      <div
+                        className="progress-fill"
+                        style={{ width: `${stats.progress}%` }}
+                      />
+                    </div>
+
+                    {stats.isRelease && (
+                      <p className="progress-detail">
+                        {stats.completedTracks} de {stats.tracks} canciones finalizadas
+                      </p>
+                    )}
+                  </div>
+
               </div>
 
-              <button
-                className="delete-project"
-                onClick={(event) => {
-                  event.stopPropagation()
-                  deleteProject(project.id)
-                }}
-                title="Eliminar proyecto"
-                aria-label="Eliminar proyecto"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
+              <div className="project-card-actions">
+                <button
+                  type="button"
+                  className="delete-project"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    deleteProject(project.id)
+                  }}
+                  title={`Eliminar ${project.name}`}
+                  aria-label={`Eliminar proyecto ${project.name}`}
                 >
-                  <path d="M3 6h18" />
-                  <path d="M8 6V4h8v2" />
-                  <path d="M19 6l-1 14H6L5 6" />
-                  <path d="M10 11v5" />
-                  <path d="M14 11v5" />
-                </svg>
-              </button>
+                  <span aria-hidden="true">🗑</span>
+                  Eliminar proyecto
+                </button>
+              </div>
             </article>
-          ))}
+            )
+          })}
 
         </div>
       </section>
